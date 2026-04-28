@@ -1,0 +1,690 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Confluence Storage Format export
+  Page title: Java Maven CI/CD - Developer Guide
+  How to import:
+    1. In Confluence, create a new page or edit an existing one.
+    2. Click "..." menu (top-right of editor) > "Source Editor" (or Ctrl+Shift+S on some versions).
+       In Confluence Data Center, this may require enabling the Source Editor add-on.
+    3. Paste the entire contents of this file (everything below the closing comment).
+    4. Click "Apply" / "Save".
+    5. Diagrams render via the draw.io app for Confluence (must be installed on your DC instance).
+-->
+
+<ac:structured-macro ac:name="info" ac:schema-version="1">
+<ac:rich-text-body>
+<p><strong>Audience:</strong> Developers working on Java/Maven applications using this CI/CD pipeline.</p>
+<p><strong>Goal:</strong> After reading this once, you should know exactly which branch to commit to, what version to expect in your build, what the Jenkins parameters do, and where your artifact will land - without asking anyone.</p>
+</ac:rich-text-body>
+</ac:structured-macro>
+
+<h2>Table of Contents</h2>
+<ac:structured-macro ac:name="toc" ac:schema-version="1">
+<ac:parameter ac:name="maxLevel">3</ac:parameter>
+<ac:parameter ac:name="minLevel">2</ac:parameter>
+</ac:structured-macro>
+
+<h2>1. TL;DR - The 60-Second Version</h2>
+<ul>
+  <li><strong>Commit your daily work to <code>master</code>.</strong> Every PR merge produces a <code>-SNAPSHOT</code> artifact deployable to <strong>Dev / UAT only</strong>.</li>
+  <li><strong>Production releases come from <code>release/X.Y</code> branches</strong>, not from master.</li>
+  <li>A release manager cuts a <code>release/X.Y</code> branch by running the master pipeline manually with <code>PROMOTE_DEV=true</code>.</li>
+  <li>A release manager produces a production-ready build by running the release-branch pipeline manually with <code>PROMOTE_RELEASE=true</code>.</li>
+  <li><strong>Snapshots never reach STG/Pre-PRD/PRD-Beta/PRD.</strong> Releases never reach Dev/UAT. The two worlds are kept strictly apart by which Artifactory repository the artifact lives in.</li>
+  <li><strong>If you find a bug in production</strong>, branch from <code>release/X.Y</code> (not master), fix, PR back to <code>release/X.Y</code>. The fix gets shipped as the next patch (e.g., <code>1.1.1</code> -&gt; <code>1.1.2</code>).</li>
+  <li><strong>After a release ships to PRD</strong>, cherry-pick the release-branch fixes back into master.</li>
+</ul>
+<p>That's it. The rest of this document explains the <em>why</em> and the corner cases.</p>
+
+<h2>2. Branches You'll See</h2>
+<table>
+  <colgroup><col/><col/><col/><col/></colgroup>
+  <tbody>
+    <tr><th>Branch</th><th>Lifetime</th><th>Purpose</th><th>Who creates it</th></tr>
+    <tr><td><code>master</code></td><td>Permanent</td><td>Trunk for all new development</td><td>-</td></tr>
+    <tr><td><code>release/X.Y</code></td><td>~2 months</td><td>Stabilization for one minor release line</td><td>Master pipeline (<code>PROMOTE_DEV</code>)</td></tr>
+    <tr><td><code>feature/&lt;ticket&gt;</code></td><td>Until merged</td><td>Bug/regression fixes against a release</td><td>Developer (you)</td></tr>
+  </tbody>
+</table>
+
+<h2>3. What Each Version Number Means</h2>
+<p>We follow <a href="https://semver.org/">Semantic Versioning</a> - <code>MAJOR.MINOR.PATCH</code>.</p>
+<table>
+  <colgroup><col/><col/><col/><col/></colgroup>
+  <tbody>
+    <tr><th>Bump</th><th>When</th><th>Example</th><th>Triggered by</th></tr>
+    <tr><td>MAJOR</td><td>Breaking changes (manual decision)</td><td><code>1.x.x</code> -&gt; <code>2.0.0</code></td><td>Manually edited</td></tr>
+    <tr><td>MINOR</td><td>New release line cut from master</td><td><code>1.1.0</code> -&gt; <code>1.2.0-SNAPSHOT</code></td><td><code>PROMOTE_DEV</code> on master</td></tr>
+    <tr><td>PATCH</td><td>Each release shipped from release branch</td><td><code>1.1.1</code> -&gt; <code>1.1.2-SNAPSHOT</code></td><td><code>PROMOTE_RELEASE</code> on release branch</td></tr>
+  </tbody>
+</table>
+
+<h2>4. Master Branch - How It Works</h2>
+
+<h3>4.1 What Master Holds</h3>
+<ul>
+  <li><code>pom.xml</code> version always ends in <code>-SNAPSHOT</code>, e.g., <code>1.1.0-SNAPSHOT</code>.</li>
+  <li>The MINOR digit reflects the <em>next</em> release line that will be cut from master, not the previous one.</li>
+</ul>
+
+<h3>4.2 Master Pipeline Decision Tree</h3>
+<ac:structured-macro ac:name="drawio" ac:schema-version="1" ac:macro-id="diag-master-pipeline">
+<ac:parameter ac:name="diagramName">Master Pipeline Decision Tree</ac:parameter>
+<ac:parameter ac:name="simpleViewer">false</ac:parameter>
+<ac:parameter ac:name="width"></ac:parameter>
+<ac:parameter ac:name="diagramWidth"></ac:parameter>
+<ac:parameter ac:name="revision">1</ac:parameter>
+<ac:parameter ac:name="lbox">1</ac:parameter>
+<ac:parameter ac:name="zoom">1</ac:parameter>
+<ac:parameter ac:name="pageId"></ac:parameter>
+<ac:parameter ac:name="custContentId"></ac:parameter>
+<ac:parameter ac:name="baseUrl"></ac:parameter>
+<ac:parameter ac:name="diagramDisplayName">Master Pipeline Decision Tree</ac:parameter>
+<ac:plain-text-body><![CDATA[<mxGraphModel dx="1422" dy="800" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="850" pageHeight="1400" math="0" shadow="0">
+  <root>
+    <mxCell id="0"/>
+    <mxCell id="1" parent="0"/>
+    <mxCell id="start" value="Jenkins build triggered on master" style="ellipse;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;" vertex="1" parent="1">
+      <mxGeometry x="320" y="40" width="220" height="50" as="geometry"/>
+    </mxCell>
+    <mxCell id="q1" value="How was it triggered?" style="rhombus;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;" vertex="1" parent="1">
+      <mxGeometry x="330" y="130" width="200" height="80" as="geometry"/>
+    </mxCell>
+    <mxCell id="build1" value="Build 1.1.0-SNAPSHOT" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;" vertex="1" parent="1">
+      <mxGeometry x="80" y="260" width="200" height="50" as="geometry"/>
+    </mxCell>
+    <mxCell id="promote" value="Promotion flow" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;fontStyle=1;" vertex="1" parent="1">
+      <mxGeometry x="580" y="260" width="200" height="50" as="geometry"/>
+    </mxCell>
+    <mxCell id="push1" value="Push to Artifactory local-dev" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;" vertex="1" parent="1">
+      <mxGeometry x="80" y="350" width="200" height="50" as="geometry"/>
+    </mxCell>
+    <mxCell id="done1" value="Available for Dev / UAT" style="ellipse;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;" vertex="1" parent="1">
+      <mxGeometry x="80" y="430" width="200" height="50" as="geometry"/>
+    </mxCell>
+    <mxCell id="s1" value="1. Strip -SNAPSHOT&#10;pom.xml = 1.1.0" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;" vertex="1" parent="1">
+      <mxGeometry x="580" y="350" width="200" height="50" as="geometry"/>
+    </mxCell>
+    <mxCell id="s2" value="2. Git tag 1.1.0" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;" vertex="1" parent="1">
+      <mxGeometry x="580" y="420" width="200" height="50" as="geometry"/>
+    </mxCell>
+    <mxCell id="s3" value="3. Build 1.1.0, push to local-release" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;" vertex="1" parent="1">
+      <mxGeometry x="580" y="490" width="200" height="50" as="geometry"/>
+    </mxCell>
+    <mxCell id="s4" value="4. Create branch release/1.1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;" vertex="1" parent="1">
+      <mxGeometry x="580" y="560" width="200" height="50" as="geometry"/>
+    </mxCell>
+    <mxCell id="s5" value="5. On release/1.1: bump pom.xml to 1.1.1-SNAPSHOT" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;" vertex="1" parent="1">
+      <mxGeometry x="580" y="630" width="200" height="50" as="geometry"/>
+    </mxCell>
+    <mxCell id="s6" value="6. Push release branch" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;" vertex="1" parent="1">
+      <mxGeometry x="580" y="700" width="200" height="50" as="geometry"/>
+    </mxCell>
+    <mxCell id="s7" value="7. Checkout master, bump pom.xml to 1.2.0-SNAPSHOT" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;" vertex="1" parent="1">
+      <mxGeometry x="580" y="770" width="200" height="50" as="geometry"/>
+    </mxCell>
+    <mxCell id="s8" value="8. Push master" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;" vertex="1" parent="1">
+      <mxGeometry x="580" y="840" width="200" height="50" as="geometry"/>
+    </mxCell>
+    <mxCell id="done2" value="Release line cut. 1.1.0 ready for STG to PRD" style="ellipse;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;" vertex="1" parent="1">
+      <mxGeometry x="580" y="920" width="200" height="60" as="geometry"/>
+    </mxCell>
+    <mxCell id="e1" style="endArrow=classic;html=1;exitX=0.5;exitY=1;entryX=0.5;entryY=0;" edge="1" parent="1" source="start" target="q1"><mxGeometry relative="1" as="geometry"/></mxCell>
+    <mxCell id="e2" value="PR merge auto" style="endArrow=classic;html=1;" edge="1" parent="1" source="q1" target="build1"><mxGeometry relative="1" as="geometry"/></mxCell>
+    <mxCell id="e3" value="Manual no params" style="endArrow=classic;html=1;" edge="1" parent="1" source="q1" target="build1"><mxGeometry relative="1" as="geometry"><Array as="points"><mxPoint x="180" y="170"/></Array></mxGeometry></mxCell>
+    <mxCell id="e4" value="Manual PROMOTE_DEV=true" style="endArrow=classic;html=1;" edge="1" parent="1" source="q1" target="promote"><mxGeometry relative="1" as="geometry"/></mxCell>
+    <mxCell id="e5" style="endArrow=classic;html=1;" edge="1" parent="1" source="build1" target="push1"><mxGeometry relative="1" as="geometry"/></mxCell>
+    <mxCell id="e6" style="endArrow=classic;html=1;" edge="1" parent="1" source="push1" target="done1"><mxGeometry relative="1" as="geometry"/></mxCell>
+    <mxCell id="e7" style="endArrow=classic;html=1;" edge="1" parent="1" source="promote" target="s1"><mxGeometry relative="1" as="geometry"/></mxCell>
+    <mxCell id="e8" style="endArrow=classic;html=1;" edge="1" parent="1" source="s1" target="s2"><mxGeometry relative="1" as="geometry"/></mxCell>
+    <mxCell id="e9" style="endArrow=classic;html=1;" edge="1" parent="1" source="s2" target="s3"><mxGeometry relative="1" as="geometry"/></mxCell>
+    <mxCell id="e10" style="endArrow=classic;html=1;" edge="1" parent="1" source="s3" target="s4"><mxGeometry relative="1" as="geometry"/></mxCell>
+    <mxCell id="e11" style="endArrow=classic;html=1;" edge="1" parent="1" source="s4" target="s5"><mxGeometry relative="1" as="geometry"/></mxCell>
+    <mxCell id="e12" style="endArrow=classic;html=1;" edge="1" parent="1" source="s5" target="s6"><mxGeometry relative="1" as="geometry"/></mxCell>
+    <mxCell id="e13" style="endArrow=classic;html=1;" edge="1" parent="1" source="s6" target="s7"><mxGeometry relative="1" as="geometry"/></mxCell>
+    <mxCell id="e14" style="endArrow=classic;html=1;" edge="1" parent="1" source="s7" target="s8"><mxGeometry relative="1" as="geometry"/></mxCell>
+    <mxCell id="e15" style="endArrow=classic;html=1;" edge="1" parent="1" source="s8" target="done2"><mxGeometry relative="1" as="geometry"/></mxCell>
+  </root>
+</mxGraphModel>]]></ac:plain-text-body>
+</ac:structured-macro>
+
+<h3>4.3 Master Pipeline - Standard Build (the 99% case)</h3>
+<p>This is what happens for every PR merge to master and every manual run without parameters:</p>
+<table>
+  <colgroup><col/><col/></colgroup>
+  <tbody>
+    <tr><th>Step</th><th>What happens</th></tr>
+    <tr><td>1</td><td>Maven builds the artifact at version <code>1.1.0-SNAPSHOT</code></td></tr>
+    <tr><td>2</td><td>Artifact published to Artifactory <code>local-dev</code></td></tr>
+    <tr><td>3</td><td>Available for deployment to Dev / UAT</td></tr>
+  </tbody>
+</table>
+<p><strong>Nothing else.</strong> No tags, no version bumps, no Git pushes. As a developer this is the only path you'll ever invoke directly.</p>
+
+<h3>4.4 Master Pipeline - PROMOTE_DEV (release manager only)</h3>
+<p>This is the rare one - it cuts a new release line. After this runs:</p>
+<ul>
+  <li>A new branch <code>release/1.1</code> exists at remote.</li>
+  <li>Tag <code>1.1.0</code> exists, pointing at the commit where master <em>was</em>.</li>
+  <li>Artifactory <code>local-release</code> has <code>1.1.0</code>.</li>
+  <li>Master is now at <code>1.2.0-SNAPSHOT</code> and ready to receive new development.</li>
+  <li><code>release/1.1</code> is at <code>1.1.1-SNAPSHOT</code> and ready for stabilization.</li>
+</ul>
+<ac:structured-macro ac:name="note" ac:schema-version="1">
+<ac:rich-text-body>
+<p><strong>Important:</strong> the same commit is the parent of both <code>master</code>'s <code>1.2.0-SNAPSHOT</code> bump and <code>release/1.1</code>'s <code>1.1.1-SNAPSHOT</code> bump. The two histories diverge from there.</p>
+</ac:rich-text-body>
+</ac:structured-macro>
+
+<h2>5. Release Branch - How It Works</h2>
+<p>The release branch pipeline has the <strong>exact same shape</strong> as the master pipeline (standard build vs. promotion), but the promotion does something different: it produces a release artifact instead of cutting a new branch.</p>
+
+<h3>5.1 What a Release Branch Holds</h3>
+<ul>
+  <li><code>pom.xml</code> version is <code>X.Y.Z-SNAPSHOT</code> where <code>Z</code> is the next patch to be released.</li>
+  <li>The MINOR digit is <strong>frozen</strong> - it will never change on this branch. Only PATCH moves.</li>
+</ul>
+
+<h3>5.2 Release Pipeline Decision Tree</h3>
+<ac:structured-macro ac:name="drawio" ac:schema-version="1" ac:macro-id="diag-release-pipeline">
+<ac:parameter ac:name="diagramName">Release Pipeline Decision Tree</ac:parameter>
+<ac:parameter ac:name="simpleViewer">false</ac:parameter>
+<ac:parameter ac:name="width"></ac:parameter>
+<ac:parameter ac:name="diagramWidth"></ac:parameter>
+<ac:parameter ac:name="revision">1</ac:parameter>
+<ac:parameter ac:name="lbox">1</ac:parameter>
+<ac:parameter ac:name="zoom">1</ac:parameter>
+<ac:parameter ac:name="pageId"></ac:parameter>
+<ac:parameter ac:name="custContentId"></ac:parameter>
+<ac:parameter ac:name="baseUrl"></ac:parameter>
+<ac:parameter ac:name="diagramDisplayName">Release Pipeline Decision Tree</ac:parameter>
+<ac:plain-text-body><![CDATA[<mxGraphModel dx="1422" dy="800" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="850" pageHeight="1200" math="0" shadow="0">
+  <root>
+    <mxCell id="0"/>
+    <mxCell id="1" parent="0"/>
+    <mxCell id="start" value="Jenkins build triggered on release/1.1" style="ellipse;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;" vertex="1" parent="1">
+      <mxGeometry x="300" y="40" width="260" height="50" as="geometry"/>
+    </mxCell>
+    <mxCell id="q1" value="How was it triggered?" style="rhombus;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;" vertex="1" parent="1">
+      <mxGeometry x="330" y="130" width="200" height="80" as="geometry"/>
+    </mxCell>
+    <mxCell id="build1" value="Build 1.1.1-SNAPSHOT" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;" vertex="1" parent="1">
+      <mxGeometry x="80" y="260" width="200" height="50" as="geometry"/>
+    </mxCell>
+    <mxCell id="promote" value="Promotion flow" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;fontStyle=1;" vertex="1" parent="1">
+      <mxGeometry x="580" y="260" width="200" height="50" as="geometry"/>
+    </mxCell>
+    <mxCell id="push1" value="Push to Artifactory local-dev" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;" vertex="1" parent="1">
+      <mxGeometry x="80" y="350" width="200" height="50" as="geometry"/>
+    </mxCell>
+    <mxCell id="done1" value="Available for Dev / UAT only" style="ellipse;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;" vertex="1" parent="1">
+      <mxGeometry x="80" y="430" width="200" height="50" as="geometry"/>
+    </mxCell>
+    <mxCell id="s1" value="1. Strip -SNAPSHOT&#10;pom.xml = 1.1.1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;" vertex="1" parent="1">
+      <mxGeometry x="580" y="350" width="200" height="50" as="geometry"/>
+    </mxCell>
+    <mxCell id="s2" value="2. Git tag 1.1.1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;" vertex="1" parent="1">
+      <mxGeometry x="580" y="420" width="200" height="50" as="geometry"/>
+    </mxCell>
+    <mxCell id="s3" value="3. Build 1.1.1, push to local-release" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;" vertex="1" parent="1">
+      <mxGeometry x="580" y="490" width="200" height="50" as="geometry"/>
+    </mxCell>
+    <mxCell id="s4" value="4. Push tag and version commit" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;" vertex="1" parent="1">
+      <mxGeometry x="580" y="560" width="200" height="50" as="geometry"/>
+    </mxCell>
+    <mxCell id="s5" value="5. Bump pom.xml to 1.1.2-SNAPSHOT" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;" vertex="1" parent="1">
+      <mxGeometry x="580" y="630" width="200" height="50" as="geometry"/>
+    </mxCell>
+    <mxCell id="s6" value="6. Push release branch" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;" vertex="1" parent="1">
+      <mxGeometry x="580" y="700" width="200" height="50" as="geometry"/>
+    </mxCell>
+    <mxCell id="done2" value="1.1.1 ready for STG to Pre-PRD to PRD-Beta to PRD" style="ellipse;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;" vertex="1" parent="1">
+      <mxGeometry x="560" y="780" width="240" height="60" as="geometry"/>
+    </mxCell>
+    <mxCell id="e1" style="endArrow=classic;html=1;exitX=0.5;exitY=1;entryX=0.5;entryY=0;" edge="1" parent="1" source="start" target="q1"><mxGeometry relative="1" as="geometry"/></mxCell>
+    <mxCell id="e2" value="PR merge auto" style="endArrow=classic;html=1;" edge="1" parent="1" source="q1" target="build1"><mxGeometry relative="1" as="geometry"/></mxCell>
+    <mxCell id="e3" value="Manual no params" style="endArrow=classic;html=1;" edge="1" parent="1" source="q1" target="build1"><mxGeometry relative="1" as="geometry"><Array as="points"><mxPoint x="180" y="170"/></Array></mxGeometry></mxCell>
+    <mxCell id="e4" value="Manual PROMOTE_RELEASE=true" style="endArrow=classic;html=1;" edge="1" parent="1" source="q1" target="promote"><mxGeometry relative="1" as="geometry"/></mxCell>
+    <mxCell id="e5" style="endArrow=classic;html=1;" edge="1" parent="1" source="build1" target="push1"><mxGeometry relative="1" as="geometry"/></mxCell>
+    <mxCell id="e6" style="endArrow=classic;html=1;" edge="1" parent="1" source="push1" target="done1"><mxGeometry relative="1" as="geometry"/></mxCell>
+    <mxCell id="e7" style="endArrow=classic;html=1;" edge="1" parent="1" source="promote" target="s1"><mxGeometry relative="1" as="geometry"/></mxCell>
+    <mxCell id="e8" style="endArrow=classic;html=1;" edge="1" parent="1" source="s1" target="s2"><mxGeometry relative="1" as="geometry"/></mxCell>
+    <mxCell id="e9" style="endArrow=classic;html=1;" edge="1" parent="1" source="s2" target="s3"><mxGeometry relative="1" as="geometry"/></mxCell>
+    <mxCell id="e10" style="endArrow=classic;html=1;" edge="1" parent="1" source="s3" target="s4"><mxGeometry relative="1" as="geometry"/></mxCell>
+    <mxCell id="e11" style="endArrow=classic;html=1;" edge="1" parent="1" source="s4" target="s5"><mxGeometry relative="1" as="geometry"/></mxCell>
+    <mxCell id="e12" style="endArrow=classic;html=1;" edge="1" parent="1" source="s5" target="s6"><mxGeometry relative="1" as="geometry"/></mxCell>
+    <mxCell id="e13" style="endArrow=classic;html=1;" edge="1" parent="1" source="s6" target="done2"><mxGeometry relative="1" as="geometry"/></mxCell>
+  </root>
+</mxGraphModel>]]></ac:plain-text-body>
+</ac:structured-macro>
+
+<h3>5.3 Release Pipeline - Standard Build</h3>
+<table>
+  <colgroup><col/><col/></colgroup>
+  <tbody>
+    <tr><th>Step</th><th>What happens</th></tr>
+    <tr><td>1</td><td>Maven builds the artifact at version <code>1.1.1-SNAPSHOT</code></td></tr>
+    <tr><td>2</td><td>Artifact published to Artifactory <code>local-dev</code></td></tr>
+    <tr><td>3</td><td>Available for deployment to <strong>Dev / UAT only</strong></td></tr>
+  </tbody>
+</table>
+<ac:structured-macro ac:name="note" ac:schema-version="1">
+<ac:rich-text-body>
+<p>Even though the artifact came from <code>release/1.1</code>, snapshots from a release branch still go to <code>local-dev</code> and are still restricted to Dev/UAT. The branch name doesn't override the snapshot rule.</p>
+</ac:rich-text-body>
+</ac:structured-macro>
+
+<h3>5.4 Release Pipeline - PROMOTE_RELEASE (release manager only)</h3>
+<p>This produces the real, deployable, immutable artifact:</p>
+<table>
+  <colgroup><col/><col/></colgroup>
+  <tbody>
+    <tr><th>Step</th><th>What happens</th></tr>
+    <tr><td>1</td><td>Strip <code>-SNAPSHOT</code> from pom.xml -&gt; <code>1.1.1</code></td></tr>
+    <tr><td>2</td><td>Git tag <code>1.1.1</code> on this commit</td></tr>
+    <tr><td>3</td><td>Build artifact at version <code>1.1.1</code>, publish to <code>local-release</code></td></tr>
+    <tr><td>4</td><td>Push the tag and version-stripped commit to remote</td></tr>
+    <tr><td>5</td><td>On the same release branch, bump pom.xml to <code>1.1.2-SNAPSHOT</code></td></tr>
+    <tr><td>6</td><td>Push the release branch</td></tr>
+  </tbody>
+</table>
+<p>After this completes, <code>1.1.1</code> is the artifact deployed to STG, then PRD-Beta, then Pre-PRD, then PRD.</p>
+
+<h2>6. Deployment Environment Sequence</h2>
+<p>Once a release artifact (e.g., <code>1.1.1</code>) is in <code>local-release</code>, it progresses through environments in this order:</p>
+<ac:structured-macro ac:name="drawio" ac:schema-version="1" ac:macro-id="diag-deploy-sequence">
+<ac:parameter ac:name="diagramName">Deployment Environment Sequence</ac:parameter>
+<ac:parameter ac:name="simpleViewer">false</ac:parameter>
+<ac:parameter ac:name="width"></ac:parameter>
+<ac:parameter ac:name="diagramWidth"></ac:parameter>
+<ac:parameter ac:name="revision">1</ac:parameter>
+<ac:parameter ac:name="lbox">1</ac:parameter>
+<ac:parameter ac:name="zoom">1</ac:parameter>
+<ac:parameter ac:name="pageId"></ac:parameter>
+<ac:parameter ac:name="custContentId"></ac:parameter>
+<ac:parameter ac:name="baseUrl"></ac:parameter>
+<ac:parameter ac:name="diagramDisplayName">Deployment Environment Sequence</ac:parameter>
+<ac:plain-text-body><![CDATA[<mxGraphModel dx="1422" dy="800" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1400" pageHeight="300" math="0" shadow="0">
+  <root>
+    <mxCell id="0"/>
+    <mxCell id="1" parent="0"/>
+    <mxCell id="src" value="local-release&#10;1.1.1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#faeeda;strokeColor=#854f0b;fontSize=13;fontStyle=1;" vertex="1" parent="1">
+      <mxGeometry x="40" y="100" width="160" height="60" as="geometry"/>
+    </mxCell>
+    <mxCell id="stg" value="STG" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=13;fontStyle=1;" vertex="1" parent="1">
+      <mxGeometry x="260" y="100" width="140" height="60" as="geometry"/>
+    </mxCell>
+    <mxCell id="pb" value="PRD-Beta" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=13;fontStyle=1;" vertex="1" parent="1">
+      <mxGeometry x="460" y="100" width="140" height="60" as="geometry"/>
+    </mxCell>
+    <mxCell id="pp" value="Pre-PRD" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=13;fontStyle=1;" vertex="1" parent="1">
+      <mxGeometry x="660" y="100" width="140" height="60" as="geometry"/>
+    </mxCell>
+    <mxCell id="prd" value="PRD" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#eaf3de;strokeColor=#3b6d11;fontSize=13;fontStyle=1;" vertex="1" parent="1">
+      <mxGeometry x="860" y="100" width="140" height="60" as="geometry"/>
+    </mxCell>
+    <mxCell id="cp" value="Cherry-pick fixes to master" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#eeedfe;strokeColor=#534ab7;fontSize=13;fontStyle=1;" vertex="1" parent="1">
+      <mxGeometry x="1060" y="100" width="200" height="60" as="geometry"/>
+    </mxCell>
+    <mxCell id="e1" style="endArrow=classic;html=1;strokeWidth=2;" edge="1" parent="1" source="src" target="stg"><mxGeometry relative="1" as="geometry"/></mxCell>
+    <mxCell id="e2" style="endArrow=classic;html=1;strokeWidth=2;" edge="1" parent="1" source="stg" target="pb"><mxGeometry relative="1" as="geometry"/></mxCell>
+    <mxCell id="e3" style="endArrow=classic;html=1;strokeWidth=2;" edge="1" parent="1" source="pb" target="pp"><mxGeometry relative="1" as="geometry"/></mxCell>
+    <mxCell id="e4" style="endArrow=classic;html=1;strokeWidth=2;" edge="1" parent="1" source="pp" target="prd"><mxGeometry relative="1" as="geometry"/></mxCell>
+    <mxCell id="e5" style="endArrow=classic;html=1;strokeWidth=2;dashed=1;" edge="1" parent="1" source="prd" target="cp"><mxGeometry relative="1" as="geometry"/></mxCell>
+  </root>
+</mxGraphModel>]]></ac:plain-text-body>
+</ac:structured-macro>
+<p>Each step is a separate deployment job - typically a Jenkins deploy pipeline, parameterized by version and environment. Promotion from one environment to the next requires sign-off (manual or automated, depending on the gate).</p>
+
+<h2>7. Fixing Bugs After Release</h2>
+<p>This is the most common scenario you'll hit as a developer after the first release ships. Two flavors, same procedure.</p>
+
+<h3>7.1 Regression Found in STG (during pre-prod testing)</h3>
+<p>Scenario: <code>1.1.1</code> was promoted, deployed to STG, and QA finds a regression. Production is <strong>not</strong> yet running this version.</p>
+<ac:structured-macro ac:name="drawio" ac:schema-version="1" ac:macro-id="diag-bugfix-sequence">
+<ac:parameter ac:name="diagramName">Regression Fix Sequence</ac:parameter>
+<ac:parameter ac:name="simpleViewer">false</ac:parameter>
+<ac:parameter ac:name="width"></ac:parameter>
+<ac:parameter ac:name="diagramWidth"></ac:parameter>
+<ac:parameter ac:name="revision">1</ac:parameter>
+<ac:parameter ac:name="lbox">1</ac:parameter>
+<ac:parameter ac:name="zoom">1</ac:parameter>
+<ac:parameter ac:name="pageId"></ac:parameter>
+<ac:parameter ac:name="custContentId"></ac:parameter>
+<ac:parameter ac:name="baseUrl"></ac:parameter>
+<ac:parameter ac:name="diagramDisplayName">Regression Fix Sequence</ac:parameter>
+<ac:plain-text-body><![CDATA[<mxGraphModel dx="1422" dy="800" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1100" pageHeight="900" math="0" shadow="0">
+  <root>
+    <mxCell id="0"/>
+    <mxCell id="1" parent="0"/>
+    <mxCell id="dev" value="Developer" style="shape=umlActor;verticalLabelPosition=bottom;labelBackgroundColor=#ffffff;verticalAlign=top;html=1;" vertex="1" parent="1">
+      <mxGeometry x="80" y="40" width="40" height="60" as="geometry"/>
+    </mxCell>
+    <mxCell id="rb" value="release/1.1" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#e1f5ee;strokeColor=#0f6e56;" vertex="1" parent="1">
+      <mxGeometry x="240" y="50" width="140" height="40" as="geometry"/>
+    </mxCell>
+    <mxCell id="fb" value="feature/fix-regression" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#fbeaf0;strokeColor=#993556;" vertex="1" parent="1">
+      <mxGeometry x="450" y="50" width="180" height="40" as="geometry"/>
+    </mxCell>
+    <mxCell id="ci" value="Jenkins" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;" vertex="1" parent="1">
+      <mxGeometry x="700" y="50" width="120" height="40" as="geometry"/>
+    </mxCell>
+    <mxCell id="art" value="Artifactory" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#faeeda;strokeColor=#854f0b;" vertex="1" parent="1">
+      <mxGeometry x="880" y="50" width="120" height="40" as="geometry"/>
+    </mxCell>
+    <mxCell id="ldev" style="endArrow=none;html=1;dashed=1;strokeColor=#999999;" edge="1" parent="1"><mxGeometry relative="1" as="geometry"><mxPoint x="100" y="100" as="sourcePoint"/><mxPoint x="100" y="850" as="targetPoint"/></mxGeometry></mxCell>
+    <mxCell id="lrb" style="endArrow=none;html=1;dashed=1;strokeColor=#999999;" edge="1" parent="1"><mxGeometry relative="1" as="geometry"><mxPoint x="310" y="100" as="sourcePoint"/><mxPoint x="310" y="850" as="targetPoint"/></mxGeometry></mxCell>
+    <mxCell id="lfb" style="endArrow=none;html=1;dashed=1;strokeColor=#999999;" edge="1" parent="1"><mxGeometry relative="1" as="geometry"><mxPoint x="540" y="100" as="sourcePoint"/><mxPoint x="540" y="850" as="targetPoint"/></mxGeometry></mxCell>
+    <mxCell id="lci" style="endArrow=none;html=1;dashed=1;strokeColor=#999999;" edge="1" parent="1"><mxGeometry relative="1" as="geometry"><mxPoint x="760" y="100" as="sourcePoint"/><mxPoint x="760" y="850" as="targetPoint"/></mxGeometry></mxCell>
+    <mxCell id="lart" style="endArrow=none;html=1;dashed=1;strokeColor=#999999;" edge="1" parent="1"><mxGeometry relative="1" as="geometry"><mxPoint x="940" y="100" as="sourcePoint"/><mxPoint x="940" y="850" as="targetPoint"/></mxGeometry></mxCell>
+    <mxCell id="note1" value="pom.xml: 1.1.2-SNAPSHOT (already bumped after 1.1.1 promotion)" style="shape=note;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;align=center;" vertex="1" parent="1">
+      <mxGeometry x="200" y="120" width="280" height="50" as="geometry"/>
+    </mxCell>
+    <mxCell id="m1" value="git checkout release/1.1" style="endArrow=classic;html=1;exitX=0.5;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1"><mxGeometry relative="1" as="geometry"><mxPoint x="100" y="200" as="sourcePoint"/><mxPoint x="310" y="200" as="targetPoint"/></mxGeometry></mxCell>
+    <mxCell id="m2" value="branch off" style="endArrow=classic;html=1;" edge="1" parent="1"><mxGeometry relative="1" as="geometry"><mxPoint x="100" y="240" as="sourcePoint"/><mxPoint x="540" y="240" as="targetPoint"/></mxGeometry></mxCell>
+    <mxCell id="m3" value="implement fix" style="endArrow=classic;html=1;" edge="1" parent="1"><mxGeometry relative="1" as="geometry"><mxPoint x="100" y="280" as="sourcePoint"/><mxPoint x="540" y="280" as="targetPoint"/></mxGeometry></mxCell>
+    <mxCell id="m4" value="push, open PR to release/1.1" style="endArrow=classic;html=1;" edge="1" parent="1"><mxGeometry relative="1" as="geometry"><mxPoint x="100" y="320" as="sourcePoint"/><mxPoint x="540" y="320" as="targetPoint"/></mxGeometry></mxCell>
+    <mxCell id="m5" value="PR merge (auto-triggers CI)" style="endArrow=classic;html=1;" edge="1" parent="1"><mxGeometry relative="1" as="geometry"><mxPoint x="540" y="360" as="sourcePoint"/><mxPoint x="310" y="360" as="targetPoint"/></mxGeometry></mxCell>
+    <mxCell id="m6" value="build" style="endArrow=classic;html=1;" edge="1" parent="1"><mxGeometry relative="1" as="geometry"><mxPoint x="310" y="400" as="sourcePoint"/><mxPoint x="760" y="400" as="targetPoint"/></mxGeometry></mxCell>
+    <mxCell id="m7" value="1.1.2-SNAPSHOT to local-dev" style="endArrow=classic;html=1;" edge="1" parent="1"><mxGeometry relative="1" as="geometry"><mxPoint x="760" y="440" as="sourcePoint"/><mxPoint x="940" y="440" as="targetPoint"/></mxGeometry></mxCell>
+    <mxCell id="note2" value="QA verifies fix on Dev/UAT" style="shape=note;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;align=center;" vertex="1" parent="1">
+      <mxGeometry x="450" y="490" width="280" height="40" as="geometry"/>
+    </mxCell>
+    <mxCell id="m8" value="manual trigger PROMOTE_RELEASE" style="endArrow=classic;html=1;strokeColor=#b85450;strokeWidth=2;" edge="1" parent="1"><mxGeometry relative="1" as="geometry"><mxPoint x="100" y="570" as="sourcePoint"/><mxPoint x="760" y="570" as="targetPoint"/></mxGeometry></mxCell>
+    <mxCell id="m9" value="1.1.2 to local-release" style="endArrow=classic;html=1;strokeColor=#82b366;strokeWidth=2;" edge="1" parent="1"><mxGeometry relative="1" as="geometry"><mxPoint x="760" y="610" as="sourcePoint"/><mxPoint x="940" y="610" as="targetPoint"/></mxGeometry></mxCell>
+    <mxCell id="note3" value="pom.xml bumped to 1.1.3-SNAPSHOT" style="shape=note;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;align=center;" vertex="1" parent="1">
+      <mxGeometry x="200" y="660" width="280" height="40" as="geometry"/>
+    </mxCell>
+    <mxCell id="note4" value="1.1.2 progresses: STG to PRD-Beta to Pre-PRD to PRD" style="shape=note;whiteSpace=wrap;html=1;fillColor=#eaf3de;strokeColor=#3b6d11;align=center;" vertex="1" parent="1">
+      <mxGeometry x="700" y="730" width="320" height="50" as="geometry"/>
+    </mxCell>
+  </root>
+</mxGraphModel>]]></ac:plain-text-body>
+</ac:structured-macro>
+
+<h3>7.2 Bug Found in PRD (after release shipped)</h3>
+<p>Same procedure as above. The only difference is that production <em>is</em> running the broken version, so urgency is higher. The branch, fix, PR, promote, deploy sequence is identical - what would have been <code>1.1.2</code> for a regression becomes <code>1.1.3</code> because some other patch already shipped between releases.</p>
+
+<h3>7.3 Common Mistakes to Avoid</h3>
+<table>
+  <colgroup><col/><col/><col/></colgroup>
+  <tbody>
+    <tr><th>Don't</th><th>Do</th><th>Why</th></tr>
+    <tr><td>Branch from master to fix a release bug</td><td>Branch from <code>release/X.Y</code></td><td>Master may have new features that aren't in production yet - they'd ship along with your fix.</td></tr>
+    <tr><td>Commit directly to <code>release/X.Y</code></td><td>Open a PR from <code>feature/*</code> -&gt; <code>release/X.Y</code></td><td>PR review and CI gates apply to release-line code too.</td></tr>
+    <tr><td>Forget to cherry-pick to master</td><td>Cherry-pick after PRD deploy</td><td>Otherwise the next minor release will reintroduce the bug.</td></tr>
+    <tr><td>Bump the version yourself in a fix PR</td><td>Let <code>PROMOTE_RELEASE</code> handle it</td><td>Manual version bumps cause merge conflicts and break the pipeline's atomic version-bump step.</td></tr>
+  </tbody>
+</table>
+
+<h2>8. Full Worked Example</h2>
+<p>Let's trace one complete cycle, step by step. <strong>Start state:</strong> master is at <code>1.1.0-SNAPSHOT</code>. Nothing else exists.</p>
+
+<h3>8.0 The Whole Lifecycle at a Glance</h3>
+<p>The diagram below shows every commit, branch, tag, and cherry-pick across all 6 phases. Each phase in the tables that follow corresponds to a region here.</p>
+<ac:structured-macro ac:name="drawio" ac:schema-version="1" ac:macro-id="diag-lifecycle">
+<ac:parameter ac:name="diagramName">Full Lifecycle Git Graph</ac:parameter>
+<ac:parameter ac:name="simpleViewer">false</ac:parameter>
+<ac:parameter ac:name="width"></ac:parameter>
+<ac:parameter ac:name="diagramWidth"></ac:parameter>
+<ac:parameter ac:name="revision">1</ac:parameter>
+<ac:parameter ac:name="lbox">1</ac:parameter>
+<ac:parameter ac:name="zoom">1</ac:parameter>
+<ac:parameter ac:name="pageId"></ac:parameter>
+<ac:parameter ac:name="custContentId"></ac:parameter>
+<ac:parameter ac:name="baseUrl"></ac:parameter>
+<ac:parameter ac:name="diagramDisplayName">Full Lifecycle Git Graph</ac:parameter>
+<ac:plain-text-body><![CDATA[<mxGraphModel dx="1422" dy="800" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1600" pageHeight="700" math="0" shadow="0">
+  <root>
+    <mxCell id="0"/>
+    <mxCell id="1" parent="0"/>
+    <mxCell id="lblM" value="master" style="text;html=1;align=right;verticalAlign=middle;fontStyle=1;fontSize=13;" vertex="1" parent="1">
+      <mxGeometry x="20" y="80" width="80" height="30" as="geometry"/>
+    </mxCell>
+    <mxCell id="lblR" value="release/1.1" style="text;html=1;align=right;verticalAlign=middle;fontStyle=1;fontSize=13;fontColor=#0f6e56;" vertex="1" parent="1">
+      <mxGeometry x="20" y="280" width="80" height="30" as="geometry"/>
+    </mxCell>
+    <mxCell id="lblF1" value="feature/fix-regression" style="text;html=1;align=right;verticalAlign=middle;fontStyle=1;fontSize=12;fontColor=#993556;" vertex="1" parent="1">
+      <mxGeometry x="0" y="450" width="100" height="30" as="geometry"/>
+    </mxCell>
+    <mxCell id="lblF2" value="feature/fix-prd-bug" style="text;html=1;align=right;verticalAlign=middle;fontStyle=1;fontSize=12;fontColor=#993556;" vertex="1" parent="1">
+      <mxGeometry x="0" y="560" width="100" height="30" as="geometry"/>
+    </mxCell>
+    <mxCell id="mline" style="endArrow=none;html=1;strokeWidth=3;strokeColor=#185fa5;" edge="1" parent="1"><mxGeometry relative="1" as="geometry"><mxPoint x="120" y="95" as="sourcePoint"/><mxPoint x="1500" y="95" as="targetPoint"/></mxGeometry></mxCell>
+    <mxCell id="rline" style="endArrow=none;html=1;strokeWidth=3;strokeColor=#0f6e56;" edge="1" parent="1"><mxGeometry relative="1" as="geometry"><mxPoint x="320" y="295" as="sourcePoint"/><mxPoint x="1500" y="295" as="targetPoint"/></mxGeometry></mxCell>
+    <mxCell id="branchcut" style="endArrow=none;html=1;strokeWidth=2;strokeColor=#0f6e56;" edge="1" parent="1"><mxGeometry relative="1" as="geometry"><mxPoint x="320" y="95" as="sourcePoint"/><mxPoint x="320" y="295" as="targetPoint"/></mxGeometry></mxCell>
+    <mxCell id="mc1" value="feature A" style="ellipse;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#185fa5;fontSize=10;" vertex="1" parent="1">
+      <mxGeometry x="140" y="80" width="80" height="30" as="geometry"/>
+    </mxCell>
+    <mxCell id="mc2" value="feature B" style="ellipse;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#185fa5;fontSize=10;" vertex="1" parent="1">
+      <mxGeometry x="230" y="80" width="80" height="30" as="geometry"/>
+    </mxCell>
+    <mxCell id="tag10" value="tag 1.1.0" style="rhombus;whiteSpace=wrap;html=1;fillColor=#faeeda;strokeColor=#854f0b;fontStyle=1;fontSize=10;" vertex="1" parent="1">
+      <mxGeometry x="290" y="75" width="80" height="40" as="geometry"/>
+    </mxCell>
+    <mxCell id="mc3" value="bump 1.2.0-SNAPSHOT" style="ellipse;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#185fa5;fontSize=10;" vertex="1" parent="1">
+      <mxGeometry x="380" y="75" width="140" height="40" as="geometry"/>
+    </mxCell>
+    <mxCell id="mc4" value="cherry-pick&#10;regression fix" style="ellipse;whiteSpace=wrap;html=1;fillColor=#eeedfe;strokeColor=#534ab7;fontSize=10;fontStyle=1;" vertex="1" parent="1">
+      <mxGeometry x="900" y="75" width="120" height="40" as="geometry"/>
+    </mxCell>
+    <mxCell id="mc5" value="cherry-pick&#10;prd bug fix" style="ellipse;whiteSpace=wrap;html=1;fillColor=#eeedfe;strokeColor=#534ab7;fontSize=10;fontStyle=1;" vertex="1" parent="1">
+      <mxGeometry x="1340" y="75" width="120" height="40" as="geometry"/>
+    </mxCell>
+    <mxCell id="rc1" value="bump 1.1.1-SNAPSHOT" style="ellipse;whiteSpace=wrap;html=1;fillColor=#e1f5ee;strokeColor=#0f6e56;fontSize=10;" vertex="1" parent="1">
+      <mxGeometry x="380" y="275" width="140" height="40" as="geometry"/>
+    </mxCell>
+    <mxCell id="tag11" value="tag 1.1.1" style="rhombus;whiteSpace=wrap;html=1;fillColor=#faeeda;strokeColor=#854f0b;fontStyle=1;fontSize=10;" vertex="1" parent="1">
+      <mxGeometry x="780" y="275" width="80" height="40" as="geometry"/>
+    </mxCell>
+    <mxCell id="rc2" value="bump 1.1.2-SNAPSHOT" style="ellipse;whiteSpace=wrap;html=1;fillColor=#e1f5ee;strokeColor=#0f6e56;fontSize=10;" vertex="1" parent="1">
+      <mxGeometry x="880" y="275" width="140" height="40" as="geometry"/>
+    </mxCell>
+    <mxCell id="tag12" value="tag 1.1.2" style="rhombus;whiteSpace=wrap;html=1;fillColor=#faeeda;strokeColor=#854f0b;fontStyle=1;fontSize=10;" vertex="1" parent="1">
+      <mxGeometry x="1220" y="275" width="80" height="40" as="geometry"/>
+    </mxCell>
+    <mxCell id="rc3" value="bump 1.1.3-SNAPSHOT" style="ellipse;whiteSpace=wrap;html=1;fillColor=#e1f5ee;strokeColor=#0f6e56;fontSize=10;" vertex="1" parent="1">
+      <mxGeometry x="1320" y="275" width="140" height="40" as="geometry"/>
+    </mxCell>
+    <mxCell id="fc1" value="regression fix" style="ellipse;whiteSpace=wrap;html=1;fillColor=#fbeaf0;strokeColor=#993556;fontSize=10;" vertex="1" parent="1">
+      <mxGeometry x="600" y="445" width="120" height="40" as="geometry"/>
+    </mxCell>
+    <mxCell id="fc2" value="prd bug fix" style="ellipse;whiteSpace=wrap;html=1;fillColor=#fbeaf0;strokeColor=#993556;fontSize=10;" vertex="1" parent="1">
+      <mxGeometry x="1040" y="555" width="120" height="40" as="geometry"/>
+    </mxCell>
+    <mxCell id="bf1" style="endArrow=none;html=1;strokeWidth=2;strokeColor=#993556;" edge="1" parent="1"><mxGeometry relative="1" as="geometry"><mxPoint x="540" y="295" as="sourcePoint"/><mxPoint x="540" y="465" as="targetPoint"/></mxGeometry></mxCell>
+    <mxCell id="bf1l" style="endArrow=none;html=1;strokeWidth=2;strokeColor=#993556;" edge="1" parent="1"><mxGeometry relative="1" as="geometry"><mxPoint x="540" y="465" as="sourcePoint"/><mxPoint x="600" y="465" as="targetPoint"/></mxGeometry></mxCell>
+    <mxCell id="mf1" style="endArrow=classic;html=1;strokeWidth=2;strokeColor=#993556;" edge="1" parent="1"><mxGeometry relative="1" as="geometry"><mxPoint x="720" y="465" as="sourcePoint"/><mxPoint x="780" y="295" as="targetPoint"/></mxGeometry></mxCell>
+    <mxCell id="bf2" style="endArrow=none;html=1;strokeWidth=2;strokeColor=#993556;" edge="1" parent="1"><mxGeometry relative="1" as="geometry"><mxPoint x="1000" y="295" as="sourcePoint"/><mxPoint x="1000" y="575" as="targetPoint"/></mxGeometry></mxCell>
+    <mxCell id="bf2l" style="endArrow=none;html=1;strokeWidth=2;strokeColor=#993556;" edge="1" parent="1"><mxGeometry relative="1" as="geometry"><mxPoint x="1000" y="575" as="sourcePoint"/><mxPoint x="1040" y="575" as="targetPoint"/></mxGeometry></mxCell>
+    <mxCell id="mf2" style="endArrow=classic;html=1;strokeWidth=2;strokeColor=#993556;" edge="1" parent="1"><mxGeometry relative="1" as="geometry"><mxPoint x="1160" y="575" as="sourcePoint"/><mxPoint x="1220" y="295" as="targetPoint"/></mxGeometry></mxCell>
+    <mxCell id="cp1" style="endArrow=classic;html=1;strokeWidth=2;strokeColor=#534ab7;dashed=1;" edge="1" parent="1"><mxGeometry relative="1" as="geometry"><mxPoint x="820" y="275" as="sourcePoint"/><mxPoint x="960" y="115" as="targetPoint"/></mxGeometry></mxCell>
+    <mxCell id="cp2" style="endArrow=classic;html=1;strokeWidth=2;strokeColor=#534ab7;dashed=1;" edge="1" parent="1"><mxGeometry relative="1" as="geometry"><mxPoint x="1260" y="275" as="sourcePoint"/><mxPoint x="1400" y="115" as="targetPoint"/></mxGeometry></mxCell>
+    <mxCell id="legend" value="Diamonds = Git tags (immutable releases)&#10;Solid lines = branch history&#10;Dashed purple = cherry-pick (post-PRD sync)" style="text;html=1;align=left;verticalAlign=top;fontSize=11;fillColor=#f5f5f5;strokeColor=#999999;" vertex="1" parent="1">
+      <mxGeometry x="40" y="640" width="400" height="60" as="geometry"/>
+    </mxCell>
+  </root>
+</mxGraphModel>]]></ac:plain-text-body>
+</ac:structured-macro>
+<p><strong>How to read it:</strong></p>
+<ul>
+  <li>The top blue line is <code>master</code> - the trunk.</li>
+  <li><code>release/1.1</code> branches off, has its own commit history, and gets tags <code>1.1.0</code>, <code>1.1.1</code>, <code>1.1.2</code> (orange diamonds).</li>
+  <li><code>feature/*</code> branches branch off the release line, get a single fix commit, then merge back.</li>
+  <li>The two <strong>cherry-pick</strong> arrows on master (purple, dashed) are the post-PRD sync - bringing release-line fixes back to trunk without merging the whole branch.</li>
+  <li><code>master</code> and <code>release/1.1</code> never reconverge directly; they only share commits via cherry-pick.</li>
+</ul>
+
+<h3>Phase 1 - Daily Development on Master</h3>
+<table>
+  <colgroup><col/><col/><col/><col/><col/><col/></colgroup>
+  <tbody>
+    <tr><th>Day</th><th>Event</th><th>Branch</th><th>pom.xml</th><th>Artifact</th><th>Repo</th></tr>
+    <tr><td>Mon</td><td>Dev opens PR with feature A, merged</td><td>master</td><td><code>1.1.0-SNAPSHOT</code></td><td><code>1.1.0-SNAPSHOT</code></td><td>local-dev</td></tr>
+    <tr><td>Tue</td><td>Dev opens PR with feature B, merged</td><td>master</td><td><code>1.1.0-SNAPSHOT</code></td><td><code>1.1.0-SNAPSHOT</code> (overwritten)</td><td>local-dev</td></tr>
+    <tr><td>Wed</td><td>QA tests <code>1.1.0-SNAPSHOT</code> on UAT, signs off</td><td>-</td><td>-</td><td>-</td><td>-</td></tr>
+  </tbody>
+</table>
+
+<h3>Phase 2 - Cut Release 1.1</h3>
+<table>
+  <colgroup><col/><col/><col/><col/><col/><col/></colgroup>
+  <tbody>
+    <tr><th>Step</th><th>Event</th><th>Branch</th><th>pom.xml</th><th>Artifact</th><th>Repo</th></tr>
+    <tr><td>Thu 1</td><td>Release manager runs master pipeline manually with <code>PROMOTE_DEV=true</code></td><td>master</td><td><code>1.1.0-SNAPSHOT</code> -&gt; <code>1.1.0</code></td><td>-</td><td>-</td></tr>
+    <tr><td>Thu 2</td><td>Pipeline tags Git as <code>1.1.0</code></td><td>master</td><td><code>1.1.0</code></td><td>-</td><td>-</td></tr>
+    <tr><td>Thu 3</td><td>Pipeline builds and publishes</td><td>master</td><td><code>1.1.0</code></td><td><code>1.1.0</code></td><td><strong>local-release</strong></td></tr>
+    <tr><td>Thu 4</td><td>Pipeline creates <code>release/1.1</code> branch</td><td>release/1.1</td><td><code>1.1.0</code></td><td>-</td><td>-</td></tr>
+    <tr><td>Thu 5</td><td>Pipeline bumps release branch</td><td>release/1.1</td><td><code>1.1.0</code> -&gt; <code>1.1.1-SNAPSHOT</code></td><td>-</td><td>-</td></tr>
+    <tr><td>Thu 6</td><td>Pipeline pushes release branch</td><td>release/1.1</td><td><code>1.1.1-SNAPSHOT</code></td><td>-</td><td>-</td></tr>
+    <tr><td>Thu 7</td><td>Pipeline switches back to master, bumps</td><td>master</td><td><code>1.1.0</code> -&gt; <code>1.2.0-SNAPSHOT</code></td><td>-</td><td>-</td></tr>
+    <tr><td>Thu 8</td><td>Pipeline pushes master</td><td>master</td><td><code>1.2.0-SNAPSHOT</code></td><td>-</td><td>-</td></tr>
+  </tbody>
+</table>
+
+<h3>Phase 3 - Deploy 1.1.0 to Production</h3>
+<table>
+  <colgroup><col/><col/></colgroup>
+  <tbody>
+    <tr><th>Step</th><th>Event</th></tr>
+    <tr><td>Fri</td><td>Deploy <code>1.1.0</code> to STG</td></tr>
+    <tr><td>Mon</td><td>Deploy <code>1.1.0</code> to PRD-Beta</td></tr>
+    <tr><td>Tue</td><td>Deploy <code>1.1.0</code> to Pre-PRD</td></tr>
+    <tr><td>Wed</td><td>Deploy <code>1.1.0</code> to PRD</td></tr>
+  </tbody>
+</table>
+
+<h3>Phase 4 - Regression Found in STG (Hypothetical)</h3>
+<p>While <code>1.1.0</code> is in STG, QA finds a regression. We need to ship a fix.</p>
+<table>
+  <colgroup><col/><col/><col/><col/><col/><col/></colgroup>
+  <tbody>
+    <tr><th>Step</th><th>Event</th><th>Branch</th><th>pom.xml</th><th>Artifact</th><th>Repo</th></tr>
+    <tr><td>1</td><td>Dev branches <code>feature/fix-regression</code> from <code>release/1.1</code></td><td>feature/fix-regression</td><td><code>1.1.1-SNAPSHOT</code></td><td>-</td><td>-</td></tr>
+    <tr><td>2</td><td>Dev implements fix, opens PR -&gt; <code>release/1.1</code>, merges</td><td>release/1.1</td><td><code>1.1.1-SNAPSHOT</code></td><td><code>1.1.1-SNAPSHOT</code></td><td>local-dev</td></tr>
+    <tr><td>3</td><td>QA verifies on UAT</td><td>-</td><td>-</td><td>-</td><td>-</td></tr>
+    <tr><td>4</td><td>Release manager runs release pipeline with <code>PROMOTE_RELEASE=true</code></td><td>release/1.1</td><td><code>1.1.1-SNAPSHOT</code> -&gt; <code>1.1.1</code></td><td><code>1.1.1</code></td><td><strong>local-release</strong></td></tr>
+    <tr><td>5</td><td>Pipeline tags Git as <code>1.1.1</code>, bumps to next snapshot</td><td>release/1.1</td><td><code>1.1.1</code> -&gt; <code>1.1.2-SNAPSHOT</code></td><td>-</td><td>-</td></tr>
+    <tr><td>6</td><td>Deploy <code>1.1.1</code> through STG -&gt; PRD-Beta -&gt; Pre-PRD -&gt; PRD</td><td>-</td><td>-</td><td>-</td><td>-</td></tr>
+    <tr><td>7</td><td>Cherry-pick the regression fix from <code>release/1.1</code> to master</td><td>master</td><td><code>1.2.0-SNAPSHOT</code> (unchanged)</td><td>-</td><td>-</td></tr>
+  </tbody>
+</table>
+
+<h3>Phase 5 - Bug Found in PRD After 1.1.1 Ships</h3>
+<p>Identical procedure. The next promotion produces <code>1.1.2</code>. The release branch ends at <code>1.1.3-SNAPSHOT</code> afterward.</p>
+
+<h3>Phase 6 - Two Months Later</h3>
+<p><code>release/1.1</code> is deleted. Tags <code>1.1.0</code>, <code>1.1.1</code>, <code>1.1.2</code> remain in Git forever. Master has long since moved on to <code>1.3.0-SNAPSHOT</code> or beyond.</p>
+
+<h2>9. FAQ - "What Do I Do When..."</h2>
+
+<h3>"I want to add a new feature."</h3>
+<p>Open a PR against <code>master</code>. After merge you'll get a <code>1.x.0-SNAPSHOT</code> artifact in <code>local-dev</code>. Done.</p>
+
+<h3>"I want my feature in the next production release."</h3>
+<p>Get it merged to master <em>before</em> a release manager runs <code>PROMOTE_DEV</code>. Once the release branch is cut, master moves on to the <em>next</em> minor - your feature won't ship in the just-cut release.</p>
+
+<h3>"I found a bug in production. How do I fix it?"</h3>
+<p>Branch <code>feature/fix-xyz</code> from <code>release/X.Y</code> (the active release branch). Fix it. PR back to <code>release/X.Y</code>. The release manager will promote when ready.</p>
+
+<h3>"I found a bug in production but the release branch was already deleted."</h3>
+<p>That means it's been more than two months since the release shipped, and a newer release line has likely superseded it. The fix path is now: branch from the <em>current</em> <code>release/X.Y</code>, fix, ship. If the bug is in production but the fix is on master only, escalate - we may need to cut a new release line off the affected tag.</p>
+
+<h3>"Can I commit directly to master?"</h3>
+<p>No. All code reaches master via PR. The pipeline will build whatever lands there, but the team policy requires PR review.</p>
+
+<h3>"Can I commit directly to a release branch?"</h3>
+<p>Same answer - PR only.</p>
+
+<h3>"I just merged a fix to release/1.1. Where's the 1.1.2 release?"</h3>
+<p><code>1.1.2</code> doesn't exist yet. Standard PR-merge builds produce snapshots. Here's what's actually happening:</p>
+<ul>
+  <li>Right after <code>1.1.1</code> was promoted, the release branch was bumped to <code>1.1.2-SNAPSHOT</code>.</li>
+  <li>Your PR-merge builds publish <code>1.1.2-SNAPSHOT</code> artifacts to <code>local-dev</code>.</li>
+  <li>When the release manager runs <code>PROMOTE_RELEASE</code>, that snapshot becomes <code>1.1.2</code> in <code>local-release</code>.</li>
+</ul>
+<p>So the snapshot version on the release branch always tells you the <em>next</em> patch number - not the previous one.</p>
+
+<h3>"What if my PR to release/1.1 conflicts with something that's already on master?"</h3>
+<p>That's expected - release branch and master have diverged. Resolve the conflict in your fix branch. Don't merge master into release/1.1.</p>
+
+<h3>"How do I deploy my SNAPSHOT to STG to test it?"</h3>
+<p>You can't. SNAPSHOTs are blocked from STG by design. Test on Dev/UAT instead. If you genuinely need a STG-quality build, you need a release artifact, which means asking the release manager to promote.</p>
+
+<h3>"I see two pom.xml versions in my git log around a release. What happened?"</h3>
+<p><code>PROMOTE_*</code> does two version commits in one pipeline run:</p>
+<ol>
+  <li>Strip <code>-SNAPSHOT</code> (e.g., <code>1.1.1-SNAPSHOT</code> -&gt; <code>1.1.1</code>) - the commit that gets tagged.</li>
+  <li>Bump to next snapshot (e.g., <code>1.1.1</code> -&gt; <code>1.1.2-SNAPSHOT</code>) - the commit you'll see at HEAD afterward.</li>
+</ol>
+<p>This is normal. Don't try to undo the second one.</p>
+
+<h3>"Can a snapshot ever go to PRD?"</h3>
+<p>No. The pipeline rejects it. The deploy jobs reject it. There is no override.</p>
+
+<h3>"Can a release artifact ever go to Dev/UAT?"</h3>
+<p>Also no. Dev/UAT pull from <code>local-dev</code>, which only contains snapshots.</p>
+
+<h3>"I see 1.2.0-SNAPSHOT on master but the latest production is 1.1.1. Is master ahead?"</h3>
+<p>Yes - by design. Once <code>release/1.1</code> is cut, master immediately bumps to the <em>next</em> minor (<code>1.2.0-SNAPSHOT</code>) so any new development going to master is clearly destined for the future <code>1.2.0</code> release line. The currently-shipping production version (<code>1.1.x</code>) lives on <code>release/1.1</code>.</p>
+
+<h2>10. Cheat Sheet</h2>
+
+<h3>Branch -&gt; Version -&gt; Repo -&gt; Environment</h3>
+<table>
+  <colgroup><col/><col/><col/><col/><col/></colgroup>
+  <tbody>
+    <tr><th>Branch</th><th>pom.xml typical</th><th>Build produces</th><th>Goes to repo</th><th>Deploys to</th></tr>
+    <tr><td><code>master</code></td><td><code>1.2.0-SNAPSHOT</code></td><td><code>1.2.0-SNAPSHOT</code></td><td><code>local-dev</code></td><td>Dev, UAT</td></tr>
+    <tr><td><code>master</code> + <code>PROMOTE_DEV</code></td><td><code>1.2.0</code> (transient)</td><td><code>1.2.0</code></td><td><code>local-release</code></td><td>STG -&gt; PRD</td></tr>
+    <tr><td><code>release/1.1</code></td><td><code>1.1.2-SNAPSHOT</code></td><td><code>1.1.2-SNAPSHOT</code></td><td><code>local-dev</code></td><td>Dev, UAT</td></tr>
+    <tr><td><code>release/1.1</code> + <code>PROMOTE_RELEASE</code></td><td><code>1.1.2</code> (transient)</td><td><code>1.1.2</code></td><td><code>local-release</code></td><td>STG -&gt; PRD</td></tr>
+    <tr><td><code>feature/*</code> from release</td><td>inherits release</td><td>(typically not built independently)</td><td>-</td><td>-</td></tr>
+  </tbody>
+</table>
+
+<h3>When to Use Which Branch</h3>
+<table>
+  <colgroup><col/><col/><col/></colgroup>
+  <tbody>
+    <tr><th>Goal</th><th>Branch from</th><th>PR back to</th></tr>
+    <tr><td>New feature</td><td><code>master</code></td><td><code>master</code></td></tr>
+    <tr><td>Fix to in-flight release (in STG)</td><td><code>release/X.Y</code></td><td><code>release/X.Y</code></td></tr>
+    <tr><td>Fix to live production</td><td><code>release/X.Y</code></td><td><code>release/X.Y</code></td></tr>
+    <tr><td>Hotfix to a released-and-deleted-branch version</td><td>Ask release manager</td><td>-</td></tr>
+  </tbody>
+</table>
+
+<h3>Version Bumps at a Glance</h3>
+<table>
+  <colgroup><col/><col/><col/></colgroup>
+  <tbody>
+    <tr><th>Trigger</th><th>Before</th><th>After</th></tr>
+    <tr><td><code>PROMOTE_DEV</code> on master (1.1.x line)</td><td>master: <code>1.1.0-SNAPSHOT</code></td><td>master: <code>1.2.0-SNAPSHOT</code> + new <code>release/1.1</code> at <code>1.1.1-SNAPSHOT</code>, tag <code>1.1.0</code></td></tr>
+    <tr><td><code>PROMOTE_RELEASE</code> on release/1.1 (Nth time)</td><td>release/1.1: <code>1.1.N-SNAPSHOT</code></td><td>release/1.1: <code>1.1.(N+1)-SNAPSHOT</code>, tag <code>1.1.N</code></td></tr>
+  </tbody>
+</table>
+
+<h2>11. Glossary</h2>
+<table>
+  <colgroup><col/><col/></colgroup>
+  <tbody>
+    <tr><th>Term</th><th>Meaning</th></tr>
+    <tr><td><strong>Artifactory</strong></td><td>The artifact repository (JFrog Artifactory). Holds all built JARs/WARs.</td></tr>
+    <tr><td><strong><code>local-dev</code></strong></td><td>The Artifactory repo for snapshot artifacts. Mutable. Feeds Dev/UAT.</td></tr>
+    <tr><td><strong><code>local-release</code></strong></td><td>The Artifactory repo for release artifacts. Immutable. Feeds STG and beyond.</td></tr>
+    <tr><td><strong>SNAPSHOT</strong></td><td>A Maven version with <code>-SNAPSHOT</code> suffix. Mutable, in-development.</td></tr>
+    <tr><td><strong>Release artifact</strong></td><td>A Maven version <em>without</em> <code>-SNAPSHOT</code>. Immutable, production-eligible.</td></tr>
+    <tr><td><strong><code>PROMOTE_DEV</code></strong></td><td>Jenkins parameter on the master pipeline. Cuts a new <code>release/X.Y</code> branch and produces the <code>X.Y.0</code> release artifact.</td></tr>
+    <tr><td><strong><code>PROMOTE_RELEASE</code></strong></td><td>Jenkins parameter on the release-branch pipeline. Produces the next patch release artifact (<code>X.Y.Z</code>).</td></tr>
+    <tr><td><strong>Cherry-pick</strong></td><td>Copying a single commit from one branch to another (without merging the whole branch). Used to bring release-line fixes back to master.</td></tr>
+    <tr><td><strong>MAJOR / MINOR / PATCH</strong></td><td>The three components of a SemVer version. We bump MINOR at release-branch cut and PATCH at each release-branch promotion.</td></tr>
+    <tr><td><strong>STG</strong></td><td>Staging environment - first stop for release artifacts.</td></tr>
+    <tr><td><strong>PRD-Beta</strong></td><td>Limited-traffic production environment (canary).</td></tr>
+    <tr><td><strong>Pre-PRD</strong></td><td>Final pre-production validation environment.</td></tr>
+    <tr><td><strong>PRD</strong></td><td>Production.</td></tr>
+  </tbody>
+</table>
+
+<hr/>
+<p><em>Questions or corrections? Open an issue against this document or ping the DevOps team.</em></p>
