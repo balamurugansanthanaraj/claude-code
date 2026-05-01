@@ -1,0 +1,192 @@
+# CI/CD Pipeline Reference
+
+## Java Maven Build & Versioning Strategy
+
+> **Version Pattern:** `MAJOR.MINOR.PATCH` (e.g., `1.1.0`)  
+> **Branch Model:** GitHub Flow
+
+-----
+
+## 1. Overview
+
+This document describes the CI/CD pipeline design for Java Maven-based applications built on a GitHub Flow branching strategy. It covers automatic and manual build triggers, version management, artifact promotion, and environment deployment rules across two primary branch types: **master** and **release**.
+
+> **Key Rule:** `SNAPSHOT` suffixes denote development builds. Only release artifacts (without `SNAPSHOT`) are eligible for staging and production environments.
+
+-----
+
+## 2. Versioning Conventions
+
+|Identifier      |Example         |Description                                 |
+|----------------|----------------|--------------------------------------------|
+|SNAPSHOT build  |`1.1.0-SNAPSHOT`|Development/CI artifact — DEV and UAT only  |
+|Release artifact|`1.1.0`         |Stable, promotable — STG through PRD        |
+|MINOR bump      |`1.1 → 1.2`     |Triggered on master after release branch cut|
+|PATCH bump      |`1.1.1 → 1.1.2` |Triggered on release branch after promotion |
+
+-----
+
+## 3. Environment Deployment Rules
+
+|Artifact Type    |DEV / UAT|STG|PRE-PRD / PRD-BETA|PRD|
+|-----------------|:-------:|:-:|:----------------:|:-:|
+|`1.1.0-SNAPSHOT` |✅        |❌  |❌                 |❌  |
+|`1.1.0` (release)|✅        |✅  |✅                 |✅  |
+
+-----
+
+## 4. Master Branch Pipeline
+
+Active pom.xml version: `1.1.0-SNAPSHOT`
+
+The master branch is the primary integration branch. Its `pom.xml` always carries a `SNAPSHOT` version, reflecting ongoing development. Two execution modes are supported.
+
+-----
+
+### 4.1 Standard Build — Auto-Trigger & Manual (no parameters)
+
+|Trigger Type      |Condition          |Outcome                            |
+|------------------|-------------------|-----------------------------------|
+|Auto-trigger      |PR merged to master|Initiates CI build immediately     |
+|Manual (no params)|Human-initiated    |Behaves identically to auto-trigger|
+
+**Steps:**
+
+1. Build the Maven package at version `1.1.0-SNAPSHOT`.
+1. Publish the artifact to Artifactory: `local-dev`.
+1. Deploy to **DEV** and **UAT** only. Deployment to STG, PRE-PRD, PRD-BETA, and PRD is not permitted for SNAPSHOT artifacts.
+
+-----
+
+### 4.2 Promote to Release — Manual (`PROMOTE_DEV=true`)
+
+|Trigger Type             |Condition                 |Outcome                                   |
+|-------------------------|--------------------------|------------------------------------------|
+|Manual (PROMOTE_DEV=true)|Human-initiated with param|Executes full release branch creation flow|
+
+**Steps:**
+
+1. Remove the `SNAPSHOT` suffix from `pom.xml` — version becomes `1.1.0`.
+1. Tag the master branch commit with the release version: `1.1.0`.
+1. Build the Maven package at version `1.1.0`.
+1. Publish the release artifact to Artifactory: `local-release`.
+1. Create release branch: `release/1.1`.
+1. On `release/1.1`: bump `pom.xml` to `1.1.1-SNAPSHOT` (PATCH increment).
+1. Push the release branch changes to the remote repository.
+1. Checkout master branch.
+1. On master: bump `pom.xml` to `1.2.0-SNAPSHOT` (MINOR increment).
+1. Push the master branch changes to the remote repository.
+
+-----
+
+## 5. Release Branch Pipeline
+
+Initial pom.xml version on `release/1.1`: `1.1.1-SNAPSHOT`
+
+Release branches (e.g., `release/1.1`) are created from master during the `PROMOTE_DEV` flow. They carry their own PATCH-incrementing SNAPSHOT version and support the same two execution modes as the master pipeline.
+
+-----
+
+### 5.1 Standard Build — Auto-Trigger & Manual (no parameters)
+
+|Trigger Type      |Condition                  |Outcome                            |
+|------------------|---------------------------|-----------------------------------|
+|Auto-trigger      |PR merged to release branch|Initiates CI build immediately     |
+|Manual (no params)|Human-initiated            |Behaves identically to auto-trigger|
+
+**Steps:**
+
+1. Build the Maven package at version `1.1.1-SNAPSHOT`.
+1. Publish the artifact to Artifactory: `local-dev`.
+1. Deploy to **DEV** and **UAT** only. Deployment to STG, PRE-PRD, PRD-BETA, and PRD is not permitted.
+
+-----
+
+### 5.2 Promote Release — Manual (`PROMOTE_RELEASE=true`)
+
+|Trigger Type                 |Condition                 |Outcome                             |
+|-----------------------------|--------------------------|------------------------------------|
+|Manual (PROMOTE_RELEASE=true)|Human-initiated with param|Executes full release promotion flow|
+
+**Steps:**
+
+1. Remove the `SNAPSHOT` suffix from `pom.xml` — version becomes `1.1.1`.
+1. Tag the release branch commit with version: `1.1.1`.
+1. Build the Maven package at version `1.1.1`.
+1. Publish the release artifact to Artifactory: `local-release`.
+1. Push changes to the remote repository.
+1. Checkout the `release/1.1` branch.
+1. Bump `pom.xml` to `1.1.2-SNAPSHOT` (PATCH increment) on the release branch.
+1. Push the release branch changes to the remote repository.
+
+-----
+
+## 6. Upper-Environment Deployment Sequence
+
+Once a release artifact (e.g., `1.1.1`) has been published to `local-release`, it follows a sequential promotion path. Each gate requires validation before proceeding.
+
+|#  |Environment |Notes                                                                        |
+|:-:|------------|-----------------------------------------------------------------------------|
+|1  |**STG**     |First upper-environment gate. Regression and integration testing occurs here.|
+|2  |**PRD-BETA**|Beta release validation with limited production traffic.                     |
+|3  |**PRE-PRD** |Final pre-production validation before full production deployment.           |
+|4  |**PRD**     |Full production deployment. Triggers post-deployment cherry-pick to master.  |
+
+
+> **Note:** Following a successful PRD deployment, a cherry-pick from the release branch must be executed to merge the production changes back into master, ensuring branch parity.
+
+-----
+
+## 7. Post-Production Merge (Cherry-Pick to Master)
+
+After a successful production deployment, the release-specific changes must be reflected in master. This is achieved through a **cherry-pick** from the release branch — not a direct merge — to preserve a clean and auditable commit history on master.
+
+-----
+
+## 8. Release Branch Lifecycle & Retention
+
+|Attribute       |Detail                                                                                        |
+|----------------|----------------------------------------------------------------------------------------------|
+|Retention period|2 months from initial PRD deployment, or until the next major release — whichever comes first.|
+|Deletion trigger|Expiry of the retention window or superseded by next release branch.                          |
+|Patch source    |All STG/PRD regression fixes branch from the release branch, not master.                      |
+
+-----
+
+## 9. Regression & Production Defect Resolution
+
+Defects identified in upper environments are resolved via short-lived feature branches created from the release branch. Fixes flow through the standard CI pipeline and validation gates before re-promotion.
+
+### 9.1 Regression Fix (Defect Found in STG)
+
+1. Create a feature branch from `release/1.1` targeting the specific regression.
+1. Implement the fix and raise a Pull Request against the release branch.
+1. Upon PR merge into `release/1.1`, the standard CI pipeline triggers automatically (producing e.g., `1.1.2-SNAPSHOT`).
+1. Execute `PROMOTE_RELEASE` to publish `1.1.2` and advance the release branch to `1.1.3-SNAPSHOT`.
+1. Deploy `1.1.2` through the upper-environment sequence: STG → PRD-BETA → PRE-PRD → PRD.
+
+### 9.2 Production Defect Fix (Defect Found in PRD)
+
+1. Create a feature branch from the release branch corresponding to the affected production version.
+1. Implement the fix and raise a Pull Request against the release branch.
+1. Upon PR merge, the standard CI pipeline triggers automatically.
+1. Execute `PROMOTE_RELEASE` to publish the next patch release.
+1. Deploy through the upper-environment sequence: STG → PRD-BETA → PRE-PRD → PRD.
+1. After successful PRD deployment, cherry-pick changes back to master.
+
+-----
+
+## 10. Full Version Progression Example
+
+End-to-end version lifecycle from initial SNAPSHOT through multiple patch releases and defect fixes.
+
+|Event                    |Branch                |Artifact        |Next SNAPSHOT            |
+|-------------------------|----------------------|----------------|-------------------------|
+|PR merged to master      |`master`              |`1.1.0-SNAPSHOT`|—                        |
+|PROMOTE_DEV              |`master → release/1.1`|`1.1.0` ✅       |master: `1.2.0-SNAPSHOT` |
+|PR merged to release/1.1 |`release/1.1`         |`1.1.1-SNAPSHOT`|—                        |
+|PROMOTE_RELEASE          |`release/1.1`         |`1.1.1` ✅       |release: `1.1.2-SNAPSHOT`|
+|STG regression fix merged|`release/1.1`         |`1.1.2-SNAPSHOT`|—                        |
+|PROMOTE_RELEASE          |`release/1.1`         |`1.1.2` ✅       |release: `1.1.3-SNAPSHOT`|
+|PRD defect fix merged    |`release/1.1`         |`1.1.3-SNAPSHOT`|—                        |
+|PROMOTE_RELEASE          |`release/1.1`         |`1.1.3` ✅       |release: `1.1.4-SNAPSHOT`|
